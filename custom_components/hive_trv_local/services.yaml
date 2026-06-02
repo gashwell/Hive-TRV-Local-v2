@@ -1,0 +1,87 @@
+boost:
+  name: Boost
+  description: Start a timed boost on a room group.
+  fields:
+    entity_id:
+      name: Entity
+      description: The room group climate entity.
+      required: true
+      selector:
+        entity:
+          domain: climate
+          integration: hive_trv_local
+    temperature:
+      name: Temperature
+      description: Boost target temperature (°C). Uses stored default if omitted.
+      selector:
+        number:
+          min: 5
+          max: 32
+          step: 0.5
+          unit_of_measurement: "°C"
+          mode: slider
+    duration_minutes:
+      name: Duration
+      description: Boost duration in minutes. Uses stored default if omitted.
+      selector:
+        number:
+          min: 1
+          max: 1440
+          step: 1
+          unit_of_measurement: min
+          mode: box
+
+end_boost:
+  name: End Boost
+  description: Cancel an active boost on a room group.
+  fields:
+    entity_id:
+      name: Entity
+      required: true
+      selector:
+        entity:
+          domain: climate
+          integration: hive_trv_local
+
+set_schedule:
+  name: Set Schedule
+  description: Set a weekly heating schedule on a room group.
+  fields:
+    entity_id:
+      name: Entity
+      required: true
+      selector:
+        entity:
+          domain: climate
+          integration: hive_trv_local
+    schedule:
+      name: Schedule
+      description: List of slots with days (0=Mon), time (HH:MM), and temperature.
+      required: true
+      example: '[{"days":[0,1,2,3,4],"time":"07:00","temperature":21.0}]'
+      selector:
+        object:
+
+clear_schedule:
+  name: Clear Schedule
+  description: Remove the schedule from a room group (returns to manual mode).
+  fields:
+    entity_id:
+      name: Entity
+      required: true
+      selector:
+        entity:
+          domain: climate
+          integration: hive_trv_local
+
+advance_schedule:
+  name: Advance Schedule
+  description: Skip to the next scheduled slot immediately.
+  fields:
+    entity_id:
+      name: Entity
+      required: true
+      selector:
+        entity:
+          domain: climate
+          integration: hive_trv_local

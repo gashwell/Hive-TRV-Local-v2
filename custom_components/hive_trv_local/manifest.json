@@ -1,0 +1,17 @@
+{
+  "domain": "hive_trv_local",
+  "name": "Hive TRV Local",
+  "version": "2.0.0",
+  "documentation": "https://github.com/gashwell/Hive-TRV-Local-v2",
+  "issue_tracker": "https://github.com/gashwell/Hive-TRV-Local-v2/issues",
+  "dependencies": [],
+  "after_dependencies": [
+    "mqtt"
+  ],
+  "codeowners": [
+    "@gashwell"
+  ],
+  "requirements": [],
+  "iot_class": "local_push",
+  "config_flow": true
+}
