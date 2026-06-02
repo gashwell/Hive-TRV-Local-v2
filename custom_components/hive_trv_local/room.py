@@ -174,6 +174,22 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     @property
+    def schedule_slots(self) -> list[dict]:
+        """Return the current schedule slots for the card to display."""
+        return list(self._schedule_mgr._schedule)
+
+    @property
+    def schedule_current_slot(self) -> int:
+        """Index of the currently active schedule slot."""
+        slot = self._schedule_mgr._current_slot()
+        if slot is None:
+            return 0
+        try:
+            return self._schedule_mgr._schedule.index(slot)
+        except ValueError:
+            return 0
+
+    @property
     def boost_end_time(self) -> datetime | None:
         return self._boost_end
 
