@@ -42,6 +42,16 @@ def _diag(entry: ConfigEntry, msg: str, *args: Any) -> None:
 # ── Lifecycle ──────────────────────────────────────────────────────────────────
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the Hive TRV Card JS with the HA frontend."""
+    from pathlib import Path
+    from homeassistant.components.frontend import add_extra_js_url
+
+    card_path = Path(__file__).parent / "hive-trv-card.js"
+    url_path  = f"/{DOMAIN}/hive-trv-card.js"
+
+    hass.http.register_static_path(url_path, str(card_path), cache_headers=True)
+    add_extra_js_url(hass, url_path)
+    _LOGGER.info("Hive TRV Card registered at %s", url_path)
     return True
 
 
