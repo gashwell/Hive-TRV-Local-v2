@@ -134,11 +134,13 @@ class HiveRoomClimate(CoordinatorEntity[HiveRoomCoordinator], ClimateEntity):
     @property
     def extra_state_attributes(self) -> dict:
         attrs: dict = {
-            "members":             self.coordinator.member_entity_ids,
-            "member_count":        len(self.coordinator.member_entity_ids),
-            "member_temperatures": self.coordinator.member_temperatures,
-            "heat_required":       self.coordinator.heat_required,
-            "mode":                self.coordinator.mode,
+            "members":              self.coordinator.member_entity_ids,
+            "member_count":         len(self.coordinator.member_entity_ids),
+            "member_temperatures":  self.coordinator.member_temperatures,
+            "heat_required":        self.coordinator.heat_required,
+            "mode":                 self.coordinator.mode,
+            "schedule":             self.coordinator.schedule_slots,
+            "schedule_current_slot": self.coordinator.schedule_current_slot,
         }
         if self.coordinator.mode == MODE_BOOST:
             attrs["boost_ends"]              = self.coordinator.boost_end_time
