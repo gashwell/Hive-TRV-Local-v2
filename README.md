@@ -319,3 +319,11 @@ Hive TRV Local v2
 ├── const.py          — constants, model list, event names
 └── hive-trv-card.js  — bundled Lovelace card (auto-registered)
 ```
+---
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [DECISION_GUIDE.md](DECISION_GUIDE.md) | Architecture, how v2/v3 work, card selection |
+| [INSTALL_CARDS.md](INSTALL_CARDS.md) | Card installer script and manual install guide |
