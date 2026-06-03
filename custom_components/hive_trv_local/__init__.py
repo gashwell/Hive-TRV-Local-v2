@@ -47,14 +47,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     from homeassistant.components.frontend import add_extra_js_url
     from homeassistant.components.http import StaticPathConfig
 
-    card_path = Path(__file__).parent / "hive-trv-card.js"
-    url_path  = f"/{DOMAIN}/hive-trv-card.js"
-
-    await hass.http.async_register_static_paths([
-        StaticPathConfig(url_path, str(card_path), True)
-    ])
-    add_extra_js_url(hass, url_path)
-    _LOGGER.info("Hive TRV Card registered at %s", url_path)
+    for card_file in ("hive-trv-card.js", "hive-trv-group-card.js"):
+        card_path = Path(__file__).parent / card_file
+        if card_path.exists():
+            url_path = f"/{DOMAIN}/{card_file}"
+            await hass.http.async_register_static_paths([
+                StaticPathConfig(url_path, str(card_path), True)
+            ])
+            add_extra_js_url(hass, url_path)
+    _LOGGER.info("Hive TRV cards registered")
     return True
 
 
