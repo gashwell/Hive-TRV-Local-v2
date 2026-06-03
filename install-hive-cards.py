@@ -46,7 +46,16 @@ GROUP_MARKER_ATTR = "members"
 HA_CONFIG     = Path("/config")
 WWW_DIR       = HA_CONFIG / "www"
 STORAGE_DIR   = HA_CONFIG / ".storage"
-LOVELACE_FILE = STORAGE_DIR / "lovelace"
+def _find_lovelace():
+    candidates = [STORAGE_DIR / n for n in (
+        "lovelace", "lovelace.default_view", "lovelace_default_view", "frontend.lovelace",
+    )]
+    if STORAGE_DIR.exists():
+        candidates += [f for f in STORAGE_DIR.iterdir()
+                       if f.name.startswith("lovelace") and f not in candidates]
+    return next((c for c in candidates if c.exists()), STORAGE_DIR / "lovelace")
+
+LOVELACE_FILE = _find_lovelace()
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -80,9 +89,13 @@ def get_latest_release_asset_url(repo: str, filename: str) -> str:
 def load_lovelace() -> dict | None:
     if not LOVELACE_FILE.exists():
         warn(f"Lovelace storage not found at {LOVELACE_FILE}")
-        warn("Dashboard editing will be skipped.")
-        warn("Add cards manually or configure a file-based dashboard.")
-        return None
+        warn("YAML-mode or storage-mode dashboard not found.")
+    warn("Cards may already work if integration is running.")
+    warn("Try: hard-refresh browser then Add Card > search Hive TRV")
+    warn("Manual: Settings > Dashboards > Resources > Add:")
+    warn("  /local/hive-trv-card.js  (JavaScript Module)")
+    warn("  /local/hive-trv-group-card.js  (JavaScript Module)")
+    return None
     try:
         return json.loads(LOVELACE_FILE.read_text())
     except Exception as e:
