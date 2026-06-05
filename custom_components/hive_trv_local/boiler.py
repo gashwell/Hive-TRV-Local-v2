@@ -58,6 +58,7 @@ class BoilerDemandManager:
         """Subscribe to state changes for a set of member entity IDs."""
         if not member_entity_ids:
             return
+        _LOGGER.debug("Boiler: subscribing to %d member(s): %s", len(member_entity_ids), member_entity_ids)
         self._unsubscribers.append(
             async_track_state_change_event(
                 self._hass, member_entity_ids, self._on_state_change
@@ -95,10 +96,11 @@ class BoilerDemandManager:
                 {ATTR_ENTITY_ID: self._boiler},
                 blocking=False,
             )
-            _LOGGER.debug("Boiler demand → %s (%s)", "ON" if needed else "OFF", self._boiler)
+            _LOGGER.info("Boiler demand → %s (%s)", "ON" if needed else "OFF", self._boiler)
         except Exception as exc:
             _LOGGER.warning("Boiler call failed: %s", exc)
 
     @callback
     def _on_state_change(self, _event: Any) -> None:
         self._hass.async_create_task(self.async_evaluate())
+
