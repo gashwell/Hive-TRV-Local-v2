@@ -71,6 +71,7 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     async def async_setup(self) -> None:
+        _LOGGER.debug("Room setup: %s (%s)", self.room_name, self.room_id)
         self._subscribe()
         self._refresh()
 
@@ -101,6 +102,7 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         temp_sensor_ids: list[str] | None = None
     ) -> None:
         """Update membership in-place and re-subscribe."""
+        _LOGGER.info("Room %s: updating members → %s", self.room_name, member_entity_ids)
         self._unsubscribe()
         self._members = list(member_entity_ids)
         if temp_sensor_ids is not None:
@@ -203,6 +205,7 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     # ── Commands ───────────────────────────────────────────────────────────────
 
     async def async_set_mode(self, mode: str, setpoint: float | None = None) -> None:
+        _LOGGER.debug("Room %s: set_mode → %s (sp=%s)", self.room_name, mode, setpoint)
         if mode == MODE_BOOST:
             await self.async_start_boost()
             return
@@ -242,6 +245,7 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             boost_mins = duration_minutes if duration_minutes is not None else DEFAULT_BOOST_MINUTES
 
+        _LOGGER.info("Room %s: boost → %.1f°C for %d min", self.room_name, boost_temp, boost_mins)
         self._pre_boost_mode = self._mode if self._mode != MODE_BOOST else self._pre_boost_mode
         self._pre_boost_sp   = self._setpoint
         self._mode           = MODE_BOOST
@@ -256,6 +260,7 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._refresh()
 
     async def async_end_boost(self) -> None:
+        _LOGGER.info("Room %s: ending boost → returning to %s", self.room_name, self._pre_boost_mode)
         self._cancel_boost()
         await self.async_set_mode(self._pre_boost_mode, self._pre_boost_sp)
 
@@ -272,11 +277,13 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.async_set_mode(self._pre_boost_mode, self._pre_boost_sp)
 
     async def async_set_schedule(self, schedule: list[dict]) -> None:
+        _LOGGER.info("Room %s: schedule set (%d slots)", self.room_name, len(schedule))
         await self._schedule_mgr.async_set_schedule(schedule)
         self._mode = MODE_SCHEDULE
         self._refresh()
 
     def clear_schedule(self) -> None:
+        _LOGGER.info("Room %s: schedule cleared", self.room_name)
         self._schedule_mgr.clear()
         self._mode = MODE_MANUAL
         self._refresh()
@@ -286,6 +293,7 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _svc_set_temperature(self, temp: float) -> None:
         if not self._members:
             return
+        _LOGGER.debug("Room %s: set_temperature → %.1f°C on %s", self.room_name, temp, self._members)
         await self.hass.services.async_call(
             "climate", "set_temperature",
             {ATTR_ENTITY_ID: self._members, ATTR_TEMPERATURE: round(temp, 1)},
@@ -317,3 +325,4 @@ class HiveRoomCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "available":           self.available,
             "boost_end":           self._boost_end.isoformat() if self._boost_end else None,
         })
+
