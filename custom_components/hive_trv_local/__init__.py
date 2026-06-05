@@ -11,7 +11,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -215,22 +215,36 @@ async def _create_room(
     return rc
 
 
+# ── Service entity lookup ──────────────────────────────────────────────────────
+
+def _room_for_entity_id(hass: HomeAssistant, entity_id: str) -> Any:
+    """Find room coordinator by room group climate entity_id.
+
+    Uses the entity registry to resolve unique_id → room_id reliably,
+    avoiding fragile slug-based string matching.
+    """
+    ent_reg = er.async_get(hass)
+    entry = ent_reg.async_get(entity_id)
+    if entry is None:
+        return None
+    # unique_id format: "room_{room_id}_climate"
+    uid = entry.unique_id or ""
+    if uid.startswith("room_") and uid.endswith("_climate"):
+        room_id = uid[len("room_"):-len("_climate")]
+        for ed in hass.data.get(DOMAIN, {}).values():
+            rc = ed.get("rooms", {}).get(room_id)
+            if rc is not None:
+                return rc
+    return None
+
+
 # ── Services ───────────────────────────────────────────────────────────────────
 
 def _register_services(hass: HomeAssistant) -> None:
     import voluptuous as vol
 
-    def _room(entity_id: str) -> Any:
-        """Find room coordinator by room group climate entity_id."""
-        for ed in hass.data.get(DOMAIN, {}).values():
-            for rc in ed.get("rooms", {}).values():
-                slug = rc.room_name.lower().replace(" ", "_")
-                if f"climate.{slug}" == entity_id:
-                    return rc
-        return None
-
     async def _boost(call: ServiceCall) -> None:
-        rc = _room(call.data["entity_id"])
+        rc = _room_for_entity_id(hass, call.data["entity_id"])
         if rc:
             await rc.async_start_boost(
                 call.data.get(ATTR_BOOST_TEMPERATURE),
@@ -238,12 +252,12 @@ def _register_services(hass: HomeAssistant) -> None:
             )
 
     async def _end_boost(call: ServiceCall) -> None:
-        rc = _room(call.data["entity_id"])
+        rc = _room_for_entity_id(hass, call.data["entity_id"])
         if rc:
             await rc.async_end_boost()
 
     async def _set_schedule(call: ServiceCall) -> None:
-        rc = _room(call.data["entity_id"])
+        rc = _room_for_entity_id(hass, call.data["entity_id"])
         if not rc:
             return
         schedule = call.data[ATTR_SCHEDULE]
@@ -254,12 +268,12 @@ def _register_services(hass: HomeAssistant) -> None:
                 await store.async_set_room_schedule(rc.room_id, schedule)
 
     async def _clear_schedule(call: ServiceCall) -> None:
-        rc = _room(call.data["entity_id"])
+        rc = _room_for_entity_id(hass, call.data["entity_id"])
         if rc:
             rc.clear_schedule()
 
     async def _advance(call: ServiceCall) -> None:
-        rc = _room(call.data["entity_id"])
+        rc = _room_for_entity_id(hass, call.data["entity_id"])
         if rc:
             await rc._schedule_mgr.advance_to_next()
 
