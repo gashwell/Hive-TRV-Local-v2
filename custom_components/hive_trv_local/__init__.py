@@ -1,8 +1,4 @@
-"""Hive TRV Local v2.
-
-Pure coordination layer on top of Z2M / HA entities.
-No MQTT. No duplicate entities. Room groups + boiler demand only.
-"""
+"""Hive TRV Local v2."""
 from __future__ import annotations
 
 import logging
@@ -30,19 +26,10 @@ _LOGGER = logging.getLogger(f"custom_components.{DOMAIN}")
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
-# ── Diagnostic helper ──────────────────────────────────────────────────────────
-
-def _diag(entry: ConfigEntry, msg: str, *args: Any) -> None:
-    opts = entry.options or {}
-    data = entry.data or {}
-    if opts.get(CONF_ENABLE_DIAGNOSTICS, data.get(CONF_ENABLE_DIAGNOSTICS, False)):
-        _LOGGER.warning("HIVE_DIAG " + msg, *args)
-
-
 # ── Lifecycle ──────────────────────────────────────────────────────────────────
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the Hive TRV Card JS with the HA frontend."""
+    """Register Hive TRV card JS files with the HA frontend."""
     from pathlib import Path
     from homeassistant.components.frontend import add_extra_js_url
     from homeassistant.components.http import StaticPathConfig
@@ -55,6 +42,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 StaticPathConfig(url_path, str(card_path), True)
             ])
             add_extra_js_url(hass, url_path)
+            _LOGGER.debug("Registered card resource: %s", url_path)
     _LOGGER.info("Hive TRV cards registered")
     return True
 
@@ -73,26 +61,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .boiler import BoilerDemandManager
     from .storage import HiveTRVStorage
 
-    effective = {**ENTRY_DEFAULTS, **entry.data}
+    effective     = {**ENTRY_DEFAULTS, **entry.data}
+    boiler_entity = (entry.options or {}).get(CONF_BOILER_ENTITY, effective.get(CONF_BOILER_ENTITY))
 
-    def _get(key: str) -> Any:
-        return (entry.options or {}).get(key, effective.get(key))
+    _LOGGER.info("Setting up Hive TRV Local (boiler=%s)", boiler_entity)
 
-    boiler_entity = _get(CONF_BOILER_ENTITY)
-    _diag(entry, "setup: boiler=%s", boiler_entity)
-
-    # Storage
     store = HiveTRVStorage(hass, entry.entry_id)
     await store.async_load()
 
-    # Room coordinators (loaded from storage)
     rooms: dict[str, Any] = {}
 
-    def _get_rooms():
-        return rooms
-
-    # Boiler demand manager
-    boiler_mgr = BoilerDemandManager(hass, boiler_entity, _get_rooms)
+    boiler_mgr = BoilerDemandManager(hass, boiler_entity, lambda: rooms)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         DATA_STORE:  store,
@@ -100,26 +79,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "rooms":     rooms,
     }
 
-    # Load persisted room groups
-    for room_id, room_data in store.get_all_rooms().items():
+    # Load persisted rooms
+    persisted = store.get_all_rooms()
+    _LOGGER.info("Loading %d persisted room group(s)", len(persisted))
+    for room_id, room_data in persisted.items():
         await _create_room(hass, entry, store, boiler_mgr, rooms, room_id, room_data)
 
-    # Forward to entity platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Listen for room lifecycle events from config_flow
+    # ── Event listeners ──────────────────────────────────────────────────────
+
     @callback
     def _on_room_added(event: Any) -> None:
         if event.data.get("entry_id") != entry.entry_id:
             return
         if "coordinator" in event.data:
-            return  # already created, fired by _create_room
+            # Already created by _create_room — just let platforms pick it up
+            return
         room_id   = event.data.get("room_id")
         room_data = event.data.get("room_data")
-        if room_id and room_data:
-            hass.async_create_task(
-                _create_room(hass, entry, store, boiler_mgr, rooms, room_id, room_data)
-            )
+        if not room_id or not room_data:
+            _LOGGER.warning("EVENT_ROOM_ADDED missing room_id or room_data")
+            return
+        _LOGGER.info("Room added event received: %s (%s)", room_data.get("name"), room_id)
+        hass.async_create_task(
+            _create_room(hass, entry, store, boiler_mgr, rooms, room_id, room_data),
+            name=f"hive_trv_create_room_{room_id}",
+        )
 
     @callback
     def _on_room_updated(event: Any) -> None:
@@ -127,6 +113,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
         room_id     = event.data.get("room_id")
         new_members = event.data.get("new_members", [])
+        _LOGGER.info("Room updated: %s → %d member(s)", room_id, len(new_members))
         if room_id in rooms:
             rooms[room_id].update_members(new_members)
             boiler_mgr.unsubscribe_all()
@@ -138,9 +125,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if event.data.get("entry_id") != entry.entry_id:
             return
         room_id = event.data.get("room_id")
+        _LOGGER.info("Room removed: %s", room_id)
         rc = rooms.pop(room_id, None)
         if rc:
-            hass.async_create_task(rc.async_unload())
+            hass.async_create_task(rc.async_unload(), name=f"hive_trv_unload_room_{room_id}")
         boiler_mgr.unsubscribe_all()
         for r in rooms.values():
             boiler_mgr.subscribe_members(r.member_entity_ids)
@@ -149,13 +137,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(hass.bus.async_listen(EVENT_ROOM_UPDATED, _on_room_updated))
     entry.async_on_unload(hass.bus.async_listen(EVENT_ROOM_REMOVED, _on_room_removed))
 
-    # Services
     if not hass.services.has_service(DOMAIN, SERVICE_BOOST):
         _register_services(hass)
 
-    entry.async_on_unload(entry.add_update_listener(_reload))
-    _diag(entry, "setup: COMPLETE — %d rooms loaded", len(rooms))
+    # ── Options update listener ───────────────────────────────────────────────
+    # Only reload when settings (boiler/diagnostics) changed — NOT for group
+    # changes, which are handled live via the event bus above.
+    entry.async_on_unload(entry.add_update_listener(_on_options_updated))
+
+    _LOGGER.info("Hive TRV Local setup complete (%d room(s))", len(rooms))
     return True
+
+
+async def _on_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload only when boiler/diagnostics settings changed, not for group edits."""
+    old_boiler = (entry.data or {}).get(CONF_BOILER_ENTITY)
+    new_boiler = (entry.options or {}).get(CONF_BOILER_ENTITY)
+    old_diag   = (entry.data or {}).get(CONF_ENABLE_DIAGNOSTICS, False)
+    new_diag   = (entry.options or {}).get(CONF_ENABLE_DIAGNOSTICS, False)
+
+    if old_boiler != new_boiler or old_diag != new_diag:
+        _LOGGER.info(
+            "Settings changed (boiler: %s → %s, diag: %s → %s) — reloading",
+            old_boiler, new_boiler, old_diag, new_diag,
+        )
+        await hass.config_entries.async_reload(entry.entry_id)
+    else:
+        _LOGGER.debug("Options updated (group change) — no reload needed")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -166,11 +174,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await rc.async_unload()
         if bm := ed.get(DATA_BOILER):
             bm.unsubscribe_all()
+        _LOGGER.info("Hive TRV Local unloaded")
     return ok
-
-
-async def _reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 # ── Room creation helper ───────────────────────────────────────────────────────
@@ -186,10 +191,13 @@ async def _create_room(
 ) -> Any:
     from .room import HiveRoomCoordinator
 
+    name = room_data.get("name", room_id)
+    _LOGGER.info("Creating room coordinator: %s (%s)", name, room_id)
+
     rc = HiveRoomCoordinator(
         hass,
         room_id=room_id,
-        room_name=room_data["name"],
+        room_name=name,
         member_entity_ids=room_data.get("members", []),
         temp_sensor_entity_ids=room_data.get("temp_sensors", []),
         store=store,
@@ -199,35 +207,36 @@ async def _create_room(
 
     if room_data.get("schedule"):
         await rc.async_set_schedule(room_data["schedule"])
+        _LOGGER.debug("Restored schedule for %s (%d slots)", name, len(room_data["schedule"]))
 
-    # Wire boiler demand
     boiler_mgr.subscribe_members(rc.member_entity_ids)
     rc.async_add_listener(
         lambda: hass.async_create_task(boiler_mgr.async_evaluate())
     )
 
-    # Fire fully-populated event so platforms can register entities
+    # Fire with coordinator so platforms can register entities immediately
     hass.bus.async_fire(EVENT_ROOM_ADDED, {
-        "entry_id":   entry.entry_id,
-        "room_id":    room_id,
+        "entry_id":    entry.entry_id,
+        "room_id":     room_id,
         "coordinator": rc,
     })
+    _LOGGER.info(
+        "Room ready: %s | %d member(s) | %d sensor(s)",
+        name,
+        len(rc.member_entity_ids),
+        len(room_data.get("temp_sensors", [])),
+    )
     return rc
 
 
 # ── Service entity lookup ──────────────────────────────────────────────────────
 
 def _room_for_entity_id(hass: HomeAssistant, entity_id: str) -> Any:
-    """Find room coordinator by room group climate entity_id.
-
-    Uses the entity registry to resolve unique_id → room_id reliably,
-    avoiding fragile slug-based string matching.
-    """
     ent_reg = er.async_get(hass)
-    entry = ent_reg.async_get(entity_id)
+    entry   = ent_reg.async_get(entity_id)
     if entry is None:
+        _LOGGER.warning("Service call: entity not found in registry: %s", entity_id)
         return None
-    # unique_id format: "room_{room_id}_climate"
     uid = entry.unique_id or ""
     if uid.startswith("room_") and uid.endswith("_climate"):
         room_id = uid[len("room_"):-len("_climate")]
@@ -235,6 +244,7 @@ def _room_for_entity_id(hass: HomeAssistant, entity_id: str) -> Any:
             rc = ed.get("rooms", {}).get(room_id)
             if rc is not None:
                 return rc
+    _LOGGER.warning("Service call: no coordinator found for entity %s (uid=%s)", entity_id, uid)
     return None
 
 
