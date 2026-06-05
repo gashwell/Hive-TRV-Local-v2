@@ -41,6 +41,13 @@ class BoilerDemandManager:
         self._demand       = False
         self._unsubscribers: list[Callable] = []
 
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    @property
+    def boiler_entity(self) -> str | None:
+        """Return the configured boiler/receiver entity ID."""
+        return self._boiler
+
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     def update_boiler_entity(self, entity_id: str | None) -> None:
