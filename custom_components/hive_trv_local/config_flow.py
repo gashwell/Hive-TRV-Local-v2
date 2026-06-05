@@ -12,7 +12,7 @@ from homeassistant.helpers import entity_registry as er, selector
 
 from .const import (
     CONF_BOILER_ENTITY, CONF_ENABLE_DIAGNOSTICS,
-    CONFIG_VERSION, DATA_STORE, DOMAIN,
+    CONFIG_VERSION, DATA_BOILER, DATA_STORE, DOMAIN,
     ENTRY_DEFAULTS, EVENT_ROOM_ADDED, EVENT_ROOM_REMOVED, EVENT_ROOM_UPDATED,
     HIVE_DANFOSS_MODELS,
 )
@@ -28,7 +28,6 @@ class HiveTRVLocalConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
-        # Only allow one instance of this integration
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
 
@@ -86,11 +85,7 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
         return grouped
 
     def _hive_danfoss_entity_ids(self) -> list[str]:
-        """Return entity IDs of Z2M Hive/Danfoss TRV climate entities.
-
-        Filters the entity registry for mqtt-platform climate entities whose
-        Z2M model matches known Hive/Danfoss strings.
-        """
+        """Return entity IDs of Z2M Hive/Danfoss TRV climate entities."""
         try:
             ent_reg = er.async_get(self.hass)
             result  = []
@@ -99,7 +94,6 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
                     continue
                 if entry.platform not in ("mqtt", "zigbee2mqtt"):
                     continue
-                # Check Z2M model via device registry
                 if entry.device_id:
                     from homeassistant.helpers import device_registry as dr
                     dev_reg = dr.async_get(self.hass)
@@ -110,7 +104,11 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
         except Exception:
             return []
 
-    # ── Top-level menu ─────────────────────────────────────────────────────────
+    def _no_rooms_entry(self) -> config_entries.FlowResult:
+        """Return immediately if no groups exist yet."""
+        return self.async_create_entry(title="", data=self.config_entry.options)
+
+    # ── Top-level menu ────────────────────────────────────────────────────────
 
     async def async_step_init(self, _=None) -> config_entries.FlowResult:
         return self.async_show_menu(
@@ -127,9 +125,8 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         if user_input is not None:
-            # Update boiler entity on the running manager
             ed = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id, {})
-            if bm := ed.get("boiler_mgr"):
+            if bm := ed.get(DATA_BOILER):
                 bm.update_boiler_entity(user_input.get(CONF_BOILER_ENTITY) or None)
             return self.async_create_entry(title="", data={
                 **self.config_entry.options,
@@ -158,13 +155,18 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
     # ── Group management menu ─────────────────────────────────────────────────
 
     async def async_step_groups(self, _=None) -> config_entries.FlowResult:
-        rooms = self._all_rooms()
-        opts  = {"create_group": "Create a new room group"}
-        if rooms:
-            opts["edit_group"]    = "Edit group members"
-            opts["set_schedule"]  = "Set a heating schedule"
-            opts["remove_group"]  = "Remove a room group"
-        return self.async_show_menu(step_id="groups", menu_options=opts)
+        # Always show all four options — HA's async_show_menu validates options
+        # against strings.json and does not support dynamic option lists.
+        # Empty-rooms guard is handled inside each individual step instead.
+        return self.async_show_menu(
+            step_id="groups",
+            menu_options={
+                "create_group": "Create a new room group",
+                "edit_group":   "Edit group members",
+                "set_schedule": "Set a heating schedule",
+                "remove_group": "Remove a room group",
+            },
+        )
 
     # ── Create group ──────────────────────────────────────────────────────────
 
@@ -188,11 +190,10 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
     async def async_step_create_group_members(
         self, user_input: dict | None = None
     ) -> config_entries.FlowResult:
-        """Pick Hive/Danfoss TRVs from Z2M — one entity per device."""
         errors: dict = {}
-        hive_eids   = self._hive_danfoss_entity_ids()
-        grouped     = self._grouped_eids()
-        available   = [e for e in hive_eids if e not in grouped]
+        hive_eids = self._hive_danfoss_entity_ids()
+        grouped   = self._grouped_eids()
+        available = [e for e in hive_eids if e not in grouped]
 
         if user_input is not None:
             chosen = user_input.get("member_ids") or []
@@ -270,7 +271,8 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         rooms = self._all_rooms()
         if not rooms:
-            return self.async_create_entry(title="", data=self.config_entry.options)
+            return self._no_rooms_entry()
+
         if user_input is not None:
             chosen = user_input.get("room_name", "")
             for rid, rd in rooms.items():
@@ -279,6 +281,7 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
                     self._edit_name    = chosen
                     break
             return await self.async_step_edit_group_members()
+
         return self.async_show_form(
             step_id="edit_group",
             data_schema=vol.Schema({
@@ -295,12 +298,11 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict | None = None
     ) -> config_entries.FlowResult:
         errors: dict = {}
-        current  = self._all_rooms().get(self._edit_room_id, {}).get("members", [])
-        hive_eids = self._hive_danfoss_entity_ids()
+        current       = self._all_rooms().get(self._edit_room_id, {}).get("members", [])
+        hive_eids     = self._hive_danfoss_entity_ids()
         other_grouped = self._grouped_eids(exclude=self._edit_room_id)
-        available = [e for e in hive_eids if e not in other_grouped]
-        # Always include current members even if no longer matching model filter
-        selectable = sorted(set(current) | set(available))
+        available     = [e for e in hive_eids if e not in other_grouped]
+        selectable    = sorted(set(current) | set(available))
 
         if user_input is not None:
             new_members = user_input.get("member_ids") or []
@@ -313,11 +315,11 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
                 if store:
                     await store.async_save_room(self._edit_room_id, rd)
                 self.hass.bus.async_fire(EVENT_ROOM_UPDATED, {
-                    "entry_id":       self.config_entry.entry_id,
-                    "room_id":        self._edit_room_id,
-                    "new_members":    new_members,
-                    "added_members":  [m for m in new_members if m not in current],
-                    "removed_members":[m for m in current if m not in new_members],
+                    "entry_id":        self.config_entry.entry_id,
+                    "room_id":         self._edit_room_id,
+                    "new_members":     new_members,
+                    "added_members":   [m for m in new_members if m not in current],
+                    "removed_members": [m for m in current if m not in new_members],
                 })
                 return self.async_create_entry(title="", data=self.config_entry.options)
 
@@ -343,7 +345,8 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         rooms = self._all_rooms()
         if not rooms:
-            return self.async_create_entry(title="", data=self.config_entry.options)
+            return self._no_rooms_entry()
+
         if user_input is not None:
             for rid, rd in rooms.items():
                 if rd.get("name") == user_input.get("room_name"):
@@ -351,6 +354,7 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
                     self._edit_name    = user_input["room_name"]
                     break
             return await self.async_step_set_schedule_preset()
+
         return self.async_show_form(
             step_id="set_schedule",
             data_schema=vol.Schema({
@@ -368,26 +372,26 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         PRESETS = {
             "comfort": [
-                {"days":[0,1,2,3,4],"time":"06:30","temperature":21.0},
-                {"days":[0,1,2,3,4],"time":"09:00","temperature":18.0},
-                {"days":[0,1,2,3,4],"time":"17:00","temperature":21.0},
-                {"days":[0,1,2,3,4],"time":"22:30","temperature":16.0},
-                {"days":[5,6],"time":"08:00","temperature":21.0},
-                {"days":[5,6],"time":"23:00","temperature":16.0},
+                {"days": [0,1,2,3,4], "time": "06:30", "temperature": 21.0},
+                {"days": [0,1,2,3,4], "time": "09:00", "temperature": 18.0},
+                {"days": [0,1,2,3,4], "time": "17:00", "temperature": 21.0},
+                {"days": [0,1,2,3,4], "time": "22:30", "temperature": 16.0},
+                {"days": [5,6],       "time": "08:00", "temperature": 21.0},
+                {"days": [5,6],       "time": "23:00", "temperature": 16.0},
             ],
             "eco": [
-                {"days":[0,1,2,3,4],"time":"07:00","temperature":19.0},
-                {"days":[0,1,2,3,4],"time":"09:00","temperature":16.0},
-                {"days":[0,1,2,3,4],"time":"17:30","temperature":19.0},
-                {"days":[0,1,2,3,4],"time":"22:30","temperature":16.0},
-                {"days":[5,6],"time":"08:30","temperature":19.0},
-                {"days":[5,6],"time":"23:00","temperature":16.0},
+                {"days": [0,1,2,3,4], "time": "07:00", "temperature": 19.0},
+                {"days": [0,1,2,3,4], "time": "09:00", "temperature": 16.0},
+                {"days": [0,1,2,3,4], "time": "17:30", "temperature": 19.0},
+                {"days": [0,1,2,3,4], "time": "22:30", "temperature": 16.0},
+                {"days": [5,6],       "time": "08:30", "temperature": 19.0},
+                {"days": [5,6],       "time": "23:00", "temperature": 16.0},
             ],
         }
         if user_input is not None:
-            preset  = user_input.get("preset", "keep")
-            store   = self._store()
-            current = self._all_rooms().get(self._edit_room_id, {}).get("schedule", [])
+            preset   = user_input.get("preset", "keep")
+            store    = self._store()
+            current  = self._all_rooms().get(self._edit_room_id, {}).get("schedule", [])
             schedule = [] if preset == "clear" else PRESETS.get(preset, current)
 
             if store and preset != "keep":
@@ -429,7 +433,8 @@ class HiveTRVLocalOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         rooms = self._all_rooms()
         if not rooms:
-            return self.async_create_entry(title="", data=self.config_entry.options)
+            return self._no_rooms_entry()
+
         if user_input is not None:
             chosen = user_input.get("room_name")
             if chosen:
