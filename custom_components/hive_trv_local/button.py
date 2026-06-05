@@ -65,7 +65,7 @@ class HiveRoomBoostButton(CoordinatorEntity[HiveRoomCoordinator], ButtonEntity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.available and bool(self._boiler_mgr._boiler)
+        return self.coordinator.available and bool(self._boiler_mgr.boiler_entity)
 
     async def async_press(self) -> None:
         await self.coordinator.async_start_boost()
@@ -95,7 +95,7 @@ class HiveRoomEndBoostButton(CoordinatorEntity[HiveRoomCoordinator], ButtonEntit
         return (
             self.coordinator.available
             and self.coordinator.mode == "boost"
-            and bool(self._boiler_mgr._boiler)
+            and bool(self._boiler_mgr.boiler_entity)
         )
 
     async def async_press(self) -> None:
